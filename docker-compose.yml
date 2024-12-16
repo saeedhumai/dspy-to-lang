@@ -1,0 +1,7 @@
+services:
+  ai_sec:
+    build: .
+    ports:
+      - 8000:8000
+    volumes:
+      - .:/app
