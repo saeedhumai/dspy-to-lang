@@ -49,7 +49,7 @@ class AylaAgentService:
         self.active_conversations: Dict[str, bool] = {}
         
         # Initialize the socket connection
-        asyncio.create_task(self.initialize_ozil_socket())
+        # asyncio.create_task(self.initialize_ozil_socket())
         
         # Provider-specific model configurations
         self.provider_models = {
