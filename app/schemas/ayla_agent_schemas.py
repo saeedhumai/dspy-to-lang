@@ -4,7 +4,7 @@ from typing import Optional, List, Literal
 class AylaAgentRequest(BaseModel):
     message: Optional[str] = None
     ayla_system_prompt: Optional[str] = None
-    conversation_id: Optional[str] = None
+    user_id: Optional[str] = None
     language: Optional[str] = "en"  # Language code (ar, fa, en)
     provider: Optional[Literal["openai", "anthropic", "gemini"]] = "openai"
     model: Optional[str] = "gpt-4"  # Model options based on provider

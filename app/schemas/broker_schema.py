@@ -11,4 +11,4 @@ class AgentMessage:
     agent_type: AgentType
     action: str
     payload: Dict
-    conversation_id: str
+    user_id: str

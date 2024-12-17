@@ -8,7 +8,7 @@ class MessageType(str, Enum):
     FOLLOWUP = "followup"
 
 class DianaMessage(BaseModel):
-    conversation_id: str
+    user_id: str
     message_content: str
     message_type: MessageType
     medicine_names: List[str]

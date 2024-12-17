@@ -6,7 +6,7 @@ test_conv_init_payload = {
   "user_whatsapp_phone_number": "+14155238886",
   "user_name": "John Doe",
   "user_address": "Al quoz street - 12 27th St - Dubai, UAE",
-  "ayla_conversation_id": "674850197227b000090d5c3f",
+  "ayla_user_id": "674850197227b000090d5c3f",
   "medicine_names": [
     "Rhinase"
   ]
@@ -17,7 +17,7 @@ test_order_init_payload = {
   "user_delivery_phone_number": "+14155238886",
   "user_name": "John Doe",
   "user_address": "Charsadda, Pakistan",
-  "follow_up_diana_conversation_id": "674850197227b000090d5c3f",
+  "follow_up_diana_user_id": "674850197227b000090d5c3f",
   "user_additional_instructions": "Please deliver to the address: Charsadda, Pakistan"
 }
 

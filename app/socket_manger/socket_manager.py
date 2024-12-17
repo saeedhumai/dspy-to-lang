@@ -22,7 +22,7 @@ class SocketManager:
             socketio_path='socket.io'  # Changed from /ws/socket.io
         )
         
-        self.active_connections: Dict[str, str] = {}  # conversation_id -> sid mapping
+        self.active_connections: Dict[str, str] = {}  # user_id -> sid mapping
         self.welcomed_conversations: set = set()  # Track welcomed conversations
         
         # Register event handlers
@@ -37,17 +37,17 @@ class SocketManager:
 
     async def handle_disconnect(self, sid):
         """Handle socket.io disconnections"""
-        # Find and remove the conversation_id associated with this sid
-        conversation_id = None
+        # Find and remove the user_id associated with this sid
+        user_id = None
         for conv_id, session_id in self.active_connections.items():
             if session_id == sid:
-                conversation_id = conv_id
+                user_id = conv_id
                 break
         
-        if conversation_id:
-            del self.active_connections[conversation_id]
+        if user_id:
+            del self.active_connections[user_id]
             # Don't remove from welcomed_conversations to remember it was welcomed
-            logger.info(f"Socket.IO connection removed for conversation: {conversation_id}")
+            logger.info(f"Socket.IO connection removed for conversation: {user_id}")
 
     async def handle_chat_message(self, sid, data):
         """Handle incoming socket.io messages"""
@@ -63,7 +63,7 @@ class SocketManager:
             request = AylaAgentRequest(**data)
             
             # Store the socket connection
-            await self.connect(sid, request.conversation_id)
+            await self.connect(sid, request.user_id)
             
             # Get AylaAgentService instance
             ayla_agent = get_ayla_agent(db=self.db)
@@ -75,25 +75,25 @@ class SocketManager:
             logger.error(f"Socket.IO error in handle_chat_message: {str(e)}")
             await self.sio.emit('error', {'message': str(e)}, room=sid)
 
-    async def connect(self, sid: str, conversation_id: str):
+    async def connect(self, sid: str, user_id: str):
         """Store new socket.io connection"""
-        self.active_connections[conversation_id] = sid
-        logger.info(f"New Socket.IO connection added: {conversation_id}")
+        self.active_connections[user_id] = sid
+        logger.info(f"New Socket.IO connection added: {user_id}")
 
-    def disconnect(self, conversation_id: str):
+    def disconnect(self, user_id: str):
         """Remove socket.io connection"""
-        if conversation_id in self.active_connections:
-            del self.active_connections[conversation_id]
-            logger.info(f"Socket.IO connection removed: {conversation_id}")
+        if user_id in self.active_connections:
+            del self.active_connections[user_id]
+            logger.info(f"Socket.IO connection removed: {user_id}")
 
-    async def send_message(self, conversation_id: str, message: dict):
+    async def send_message(self, user_id: str, message: dict):
         """Send message to specific client"""
-        if conversation_id in self.active_connections:
+        if user_id in self.active_connections:
             try:
-                sid = self.active_connections[conversation_id]
+                sid = self.active_connections[user_id]
                 await self.sio.emit('message', message, room=sid)
-                logger.info(f"Message sent to {conversation_id}")
+                logger.info(f"Message sent to {user_id}")
             except Exception as e:
-                logger.error(f"Error sending message to {conversation_id}: {str(e)}")
+                logger.error(f"Error sending message to {user_id}: {str(e)}")
         else:
-            logger.warning(f"Attempted to send message to inactive connection: {conversation_id}")
+            logger.warning(f"Attempted to send message to inactive connection: {user_id}")

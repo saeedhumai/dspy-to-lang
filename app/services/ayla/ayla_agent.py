@@ -1,7 +1,5 @@
 import dspy
-from langchain_mongodb import MongoDBChatMessageHistory
 from typing import Dict, Any, Optional
-from fastapi import HTTPException
 from bson.objectid import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, UTC
@@ -17,7 +15,6 @@ import socketio
 import asyncio
 from app.services.ayla.dspy_config import DSPyManager
 
-# Define DSPy signatures for our chat system
 class ChatResponse(dspy.Signature):
     """Process user requests for product quotes step by step."""
     message: str = dspy.InputField(desc="User's input message")
@@ -45,14 +42,43 @@ class AylaAgentService:
         self.audio_processor = audio_processor
         self.settings = settings
         self.socket_manager = socket_manager
-        
-        # Configure DSPy with the appropriate LM
-        # self._configure_dspy()
-
         self.chat_processor = dspy.ChainOfThought(ChatResponse)
-        # self.chat_processor.preset_prompt = confirmation_prompt
         self.dspy_manager = DSPyManager()
 
+        # Initialize Ozil socket client at service level
+        self.ozil_socket: Optional[socketio.AsyncClient] = None
+        self.ozil_url = settings.OZIL_SERVICE_URL
+        self.active_conversations: Dict[str, bool] = {}
+        
+        # Initialize the socket connection
+        # asyncio.create_task(self.initialize_ozil_socket())
+
+
+    async def get_active_conversation(self, user_id: str) -> Optional[Dict]:
+        """Get the most recent incomplete conversation for a user"""
+        conversation = await self.db.conversations.find_one({
+            "user_id": user_id,
+            "status": "active",
+            "confirmation_context.status": {"$ne": "complete"}
+        }, sort=[("created_at", -1)])
+        return conversation
+
+    async def create_new_conversation(self, user_id: str) -> str:
+        """Create a new conversation and return its ID"""
+        result = await self.db.conversations.insert_one({
+            "user_id": user_id,
+            "status": "active",
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+            "messages": [],
+            "confirmation_context": {
+                "status": "product",
+                "product": None,
+                "quantity": None,
+                "supplier_type": None
+            }
+        })
+        return str(result.inserted_id)
 
     async def save_message(self, conversation_id: str, content: str, sender: str, type: str = None) -> None:
         """Save a message to the conversation history"""
@@ -67,19 +93,25 @@ class AylaAgentService:
             {"_id": ObjectId(conversation_id)},
             {
                 "$push": {"messages": message_data},
-                "$setOnInsert": {"created_at": datetime.now(UTC)},
                 "$set": {"updated_at": datetime.now(UTC)}
-            },
-            upsert=True
+            }
         )
 
     async def handle_websocket_request(self, sid: str, request: AylaAgentRequest):
         """Handle chat request via Socket.IO using DSPy"""
-        logger.info(f"Processing request for user_id: {request.conversation_id}")
+        logger.info(f"Processing request for user_id: {request.user_id}")
         
-        # Get existing conversation state and history from database
-        conversation = await self.db.conversations.find_one({"_id": ObjectId(request.conversation_id)})
-        confirmation_context = conversation.get("confirmation_context", {}) if conversation else {}
+        # Get active conversation or create new one
+        conversation = await self.get_active_conversation(request.user_id)
+        
+        if not conversation:
+            # Create new conversation if there's no active incomplete one
+            conversation_id = await self.create_new_conversation(request.user_id)
+            conversation = await self.db.conversations.find_one({"_id": ObjectId(conversation_id)})
+        else:
+            conversation_id = str(conversation["_id"])
+
+        confirmation_context = conversation.get("confirmation_context", {})
         
         # Get conversation history and format it for DSPy
         messages = [
@@ -97,20 +129,6 @@ IMPORTANT RULES:
 4. Set confirmation_status based on which detail you're currently confirming
 5. Only set to_ozil=True when all details are confirmed
 
-    ## **Example interaction flow:**
-    User: "I need quotes for 200 units of Product X from private suppliers"
-    Ayla: "You mentioned Product X. Could you please confirm if this is exactly what you're looking for?"
-
-    User: "Yes, that's correct"
-    Ayla: "You mentioned 200 units. Is this the exact quantity you need?"
-
-    User: "Yes, 200 units"
-    Ayla: "Lastly, you specified private suppliers. Should I exclusively look for quotes from private suppliers?"
-
-    User: "Yes, private suppliers only"
-    Ayla: "Perfect! I'll now search for quotes for 200 units of Product X from private suppliers only."
-
-
 Current Status: {status}
 Confirmed Details:
 - Product: {product}
@@ -124,7 +142,7 @@ Confirmed Details:
             }
         ]
         
-        if conversation and "messages" in conversation:
+        if "messages" in conversation:
             for msg in conversation["messages"]:
                 role = "assistant" if msg["sender"] == "ai" else "user"
                 messages.append({
@@ -132,25 +150,18 @@ Confirmed Details:
                     "content": msg["content"]
                 })
         
-        # Add current message
         messages.append({
             "role": "user",
             "content": request.message
         })
         
-        logger.info("--------------------------------")
-        logger.info(f"Messages: {messages}")
-        logger.info("--------------------------------")
-
         try:
-            logger.info("Configuring LM")
             self.dspy_manager.configure_default_lm(
                 provider=request.provider, 
                 model=request.model, 
                 temperature=0.2
             )
 
-            # Process with DSPy
             predict = dspy.Predict(ChatResponse)
             response = predict(
                 message=request.message,
@@ -160,38 +171,58 @@ Confirmed Details:
             
             # Save AI response
             await self.save_message(
-                conversation_id=request.conversation_id,
+                conversation_id=conversation_id,
                 content=response.ayla_response,
                 sender="ai",
                 type="text"
             )
             
-            # Update confirmation context in database
-            await self.db.conversations.update_one(
-                {"_id": ObjectId(request.conversation_id)},
-                {
-                    "$set": {
-                        "confirmation_context": {
-                            "status": response.confirmation_status,
-                            "product": response.confirmed_product,
-                            "quantity": response.confirmed_quantity,
-                            "supplier_type": response.confirmed_supplier_type
+            if response.to_ozil and response.confirmation_status == "complete":
+                # Mark current conversation as complete
+                await self.db.conversations.update_one(
+                    {"_id": ObjectId(conversation_id)},
+                    {
+                        "$set": {
+                            "status": "completed",
+                            "completed_at": datetime.now(UTC),
+                            "confirmation_context": {
+                                "status": "complete",
+                                "product": response.confirmed_product,
+                                "quantity": response.confirmed_quantity,
+                                "supplier_type": response.confirmed_supplier_type
+                            }
                         }
                     }
-                },
-                upsert=True
-            )
-            
-            # Only forward to Ozil if all confirmations are complete
-            if response.to_ozil and response.confirmation_status == "complete":
+                )
+
+                logger.info("*********************************************************")
+                logger.info(f"Calling Ozil Process Response Method")
+                logger.info("*********************************************************")
+                
                 await self.process_response({
                     "ayla_response": response.ayla_response,
+                    "product": response.confirmed_product,
+                    "quantity": response.confirmed_quantity,
+                    "supplier_type": response.confirmed_supplier_type,
                     "to_ozil": True
-                }, request.conversation_id)
+                }, conversation_id)
             else:
-                # Send direct response
+                await self.db.conversations.update_one(
+                    {"_id": ObjectId(conversation_id)},
+                    {
+                        "$set": {
+                            "confirmation_context": {
+                                "status": response.confirmation_status,
+                                "product": response.confirmed_product,
+                                "quantity": response.confirmed_quantity,
+                                "supplier_type": response.confirmed_supplier_type
+                            }
+                        }
+                    }
+                )
+                
                 await self.socket_manager.send_message(
-                    request.conversation_id,
+                    request.user_id,
                     {
                         "done": True,
                         "type": "text",
@@ -199,20 +230,19 @@ Confirmed Details:
                         "sender": "ai"
                     }
                 )
+            
         except Exception as e:
             logger.error(f"Error in handle_websocket_request: {str(e)}")
-            # Save error message
             await self.save_message(
-                conversation_id=request.conversation_id,
+                conversation_id=request.user_id,
                 content=f"An error occurred while processing your request: {str(e)}",
                 sender="ai",
                 type="text"
             )
             await self.socket_manager.send_message(
-                request.conversation_id,
+                request.user_id,
                 {"done": True, "type": "text", "content": "An error occurred while processing your request.", "sender": "ai"}
             )
-
 
     async def initialize_ozil_socket(self):
         """Initialize and maintain persistent socket connection to Ozil"""
@@ -299,29 +329,19 @@ Confirmed Details:
                 await asyncio.sleep(5)  # Wait before retry
 
 
-
     async def process_response(self, parsed_response: Dict[str, Any], conversation_id: str):
         """Process response from LLM and dispatch to relevant agent."""
         try:
-            # # Add conversation to active conversations
-            # self.active_conversations[conversation_id] = True
+            # Add conversation to active conversations
+            self.active_conversations[conversation_id] = True
 
             # Add necessary data for Ozil
             ozil_message = {
-                "name": parsed_response.get("user_name", ""),
-                "conversation_id": conversation_id,
+                "user_id": conversation_id,
                 "language": getattr(self, '_language', 'en'),
                 "provider": getattr(self, '_provider', 'openai'),
                 "model": getattr(self, '_model', 'gpt-4o')
             }
-
-            # Save initial message from Ayla
-            await self.save_message(
-                conversation_id=conversation_id,
-                content=parsed_response["ayla_response"],
-                sender="ai",
-                type="text"
-            )
 
             # Send initial message to frontend
             await self.socket_manager.send_message(
