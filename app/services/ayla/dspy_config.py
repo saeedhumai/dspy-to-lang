@@ -58,4 +58,4 @@ class DSPyManager:
         logger.info(f"Configuring LM: {provider}/{model}")
         lm = self.get_lm(provider, model, temperature)
         dspy.configure(lm=lm)
-        return lm 
+        return None

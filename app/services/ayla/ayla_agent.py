@@ -19,11 +19,11 @@ from app.services.ayla.dspy_config import DSPyManager
 
 # Define DSPy signatures for our chat system
 class ChatResponse(dspy.Signature):
-    """Process user requests for product quotes and confirm details before forwarding to Ozil."""
+    """Process user requests for product quotes step by step."""
     message: str = dspy.InputField(desc="User's input message")
+    messages: list = dspy.InputField(desc="Conversation history")
     ayla_response: str = dspy.OutputField(desc="Ayla's response to the user")
     to_ozil: bool = dspy.OutputField(desc="Whether to forward to Ozil service")
-    ozil_message: Optional[str] = dspy.OutputField(desc="Message to send to Ozil containing confirmed details")
     confirmation_status: str = dspy.OutputField(desc="Current confirmation status: 'product', 'quantity', 'supplier_type', or 'complete'")
     confirmed_product: Optional[str] = dspy.OutputField(desc="Confirmed product name")
     confirmed_quantity: Optional[int] = dspy.OutputField(desc="Confirmed quantity")
@@ -48,53 +48,9 @@ class AylaAgentService:
         
         # Configure DSPy with the appropriate LM
         # self._configure_dspy()
-        
-        # Initialize chat processor with confirmation flow prompt
-        confirmation_prompt = """You are Ayla, a professional procurement assistant. Your task is to confirm product quote requests step by step.
-
-Current confirmation status: {context.get('status', 'product')}
-Previously confirmed details:
-- Product: {context.get('product', 'Not confirmed')}
-- Quantity: {context.get('quantity', 'Not confirmed')}
-- Supplier Type: {context.get('supplier_type', 'Not confirmed')}
-
-User message: {message}
-
-Confirm one detail at a time in this order: product, quantity, then supplier type.
-If a detail is unclear, ask for clarification.
-Only move to the next detail after current one is confirmed.
-Once all details are confirmed, prepare a summary for Ozil.
-
-Remember:
-- Supplier type must be either 'private', 'public', or 'both'
-- Quantity must be a positive number
-- Product name should be specific and clear"""
 
         self.chat_processor = dspy.ChainOfThought(ChatResponse)
-        self.chat_processor.preset_prompt = confirmation_prompt
-        
-        # Provider configurations remain the same
-        self.provider_models = {
-            "claude": {
-                "models": ["claude-3-opus-20240229", "claude-3-sonnet-20240229"],
-                "default": "claude-3-opus-20240229"
-            },
-            "gemini": {
-                "models": ["gemini-1.5-pro", "gemini-exp-1121", "gemini-exp-1206", "gemini-1.5-flash", "gemini-1.5-flash-8b"],
-                "default": "gemini-exp-1121"
-            },
-            "openai": {
-                "models": ["gpt-4-turbo", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
-                "default": "gpt-4o"
-            }
-        }
-        
-        self.recommended_providers = {
-            "ar": ["claude", "gemini", "openai"],
-            "fa": ["gemini", "claude", "openai"],
-            "en": ["openai", "claude", "gemini"],
-        }
-
+        # self.chat_processor.preset_prompt = confirmation_prompt
         self.dspy_manager = DSPyManager()
 
 
@@ -117,36 +73,88 @@ Remember:
             upsert=True
         )
 
-    def get_mongodb_history(self, conversation_id: str):
-        """Get MongoDB chat history instance"""
-        try:
-            return MongoDBChatMessageHistory(
-                connection_string=self.settings.MONGODB_URL,
-                database_name=self.settings.MONGODB_DB,
-                collection_name="chat_history",
-                session_id=conversation_id
-            )
-        except Exception as e:
-            logger.error(f"MongoDB connection error: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Failed to connect to MongoDB: {str(e)}")
-
     async def handle_websocket_request(self, sid: str, request: AylaAgentRequest):
         """Handle chat request via Socket.IO using DSPy"""
         logger.info(f"Processing request for user_id: {request.conversation_id}")
         
-        # Get existing conversation state from database
+        # Get existing conversation state and history from database
         conversation = await self.db.conversations.find_one({"_id": ObjectId(request.conversation_id)})
         confirmation_context = conversation.get("confirmation_context", {}) if conversation else {}
         
+        # Get conversation history and format it for DSPy
+        messages = [
+            {
+                "role": "system",
+                "content": """You are Ayla, a professional procurement assistant. Your task is to confirm product quote requests step by step, one detail at a time.
+
+IMPORTANT RULES:
+1. You must confirm ONE detail at a time in this exact order: product → quantity → supplier type
+2. Do not move to the next detail until the current one is explicitly confirmed by the user
+3. For each detail:
+   - Product: Ask for specific product name/details if unclear
+   - Quantity: Must be a positive number
+   - Supplier Type: Must be exactly 'private', 'public', or 'both'
+4. Set confirmation_status based on which detail you're currently confirming
+5. Only set to_ozil=True when all details are confirmed
+
+    ## **Example interaction flow:**
+    User: "I need quotes for 200 units of Product X from private suppliers"
+    Ayla: "You mentioned Product X. Could you please confirm if this is exactly what you're looking for?"
+
+    User: "Yes, that's correct"
+    Ayla: "You mentioned 200 units. Is this the exact quantity you need?"
+
+    User: "Yes, 200 units"
+    Ayla: "Lastly, you specified private suppliers. Should I exclusively look for quotes from private suppliers?"
+
+    User: "Yes, private suppliers only"
+    Ayla: "Perfect! I'll now search for quotes for 200 units of Product X from private suppliers only."
+
+
+Current Status: {status}
+Confirmed Details:
+- Product: {product}
+- Quantity: {quantity}
+- Supplier Type: {supplier_type}""".format(
+                    status=confirmation_context.get("status", "product"),
+                    product=confirmation_context.get("product", "Not confirmed"),
+                    quantity=confirmation_context.get("quantity", "Not confirmed"),
+                    supplier_type=confirmation_context.get("supplier_type", "Not confirmed")
+                )
+            }
+        ]
+        
+        if conversation and "messages" in conversation:
+            for msg in conversation["messages"]:
+                role = "assistant" if msg["sender"] == "ai" else "user"
+                messages.append({
+                    "role": role,
+                    "content": msg["content"]
+                })
+        
+        # Add current message
+        messages.append({
+            "role": "user",
+            "content": request.message
+        })
+        
+        logger.info("--------------------------------")
+        logger.info(f"Messages: {messages}")
+        logger.info("--------------------------------")
+
         try:
             logger.info("Configuring LM")
-            llm = self.dspy_manager.configure_default_lm(provider=request.provider, model=request.model, temperature=0.7)
+            self.dspy_manager.configure_default_lm(
+                provider=request.provider, 
+                model=request.model, 
+                temperature=0.2
+            )
 
-            logger.info(f"Using LM: {llm}")
             # Process with DSPy
-            response = self.chat_processor(
+            predict = dspy.Predict(ChatResponse)
+            response = predict(
                 message=request.message,
-                context=confirmation_context
+                messages=messages
             )
             logger.info(f"Response: {response}")
             
@@ -178,7 +186,6 @@ Remember:
             if response.to_ozil and response.confirmation_status == "complete":
                 await self.process_response({
                     "ayla_response": response.ayla_response,
-                    "ozil_message": response.ozil_message,
                     "to_ozil": True
                 }, request.conversation_id)
             else:
@@ -301,7 +308,6 @@ Remember:
 
             # Add necessary data for Ozil
             ozil_message = {
-                "message": parsed_response.get("ozil_message", ""),
                 "name": parsed_response.get("user_name", ""),
                 "conversation_id": conversation_id,
                 "language": getattr(self, '_language', 'en'),
