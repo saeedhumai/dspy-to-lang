@@ -49,31 +49,31 @@ class SocketManager:
             # Don't remove from welcomed_conversations to remember it was welcomed
             logger.info(f"Socket.IO connection removed for conversation: {user_id}")
 
+    # Modified socket_manager.py for Ayla
     async def handle_chat_message(self, sid, data):
-        """Handle incoming socket.io messages"""
+        from app.schemas.ayla_agent_schemas import AylaAgentRequest
+        from app.dependencies.depends import get_ayla_agent
+        import uuid
         try:
-            from app.services.ayla.ayla_agent import AylaAgentService
-            from app.dependencies.depends import get_ayla_agent
-            from app.schemas.ayla_agent_schemas import AylaAgentRequest
-
-            
-            logger.info(f"Received Socket.IO message from {sid}: {data}")
-            
-            # Create AylaAgentRequest from received data
             request = AylaAgentRequest(**data)
+            ayla_agent = get_ayla_agent(db=self.db)
             
-            # Store the socket connection
+            # Store connection before processing
             await self.connect(sid, request.user_id)
             
-            # Get AylaAgentService instance
-            ayla_agent = get_ayla_agent(db=self.db)
+            # Add correlation ID for tracking
+            correlation_id = str(uuid.uuid4())
+            data['correlation_id'] = correlation_id
             
             # Handle the request
             await ayla_agent.handle_websocket_request(sid, request)
             
         except Exception as e:
-            logger.error(f"Socket.IO error in handle_chat_message: {str(e)}")
-            await self.sio.emit('error', {'message': str(e)}, room=sid)
+            logger.error(f"Socket.IO error: {str(e)}")
+            await self.sio.emit('error', {
+                'correlation_id': data.get('correlation_id'),
+                'message': str(e)
+            }, room=sid)
 
     async def connect(self, sid: str, user_id: str):
         """Store new socket.io connection"""

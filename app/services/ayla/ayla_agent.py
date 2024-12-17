@@ -249,84 +249,47 @@ Confirmed Details:
         while True:
             try:
                 if self.ozil_socket is None or not self.ozil_socket.connected:
-                    self.ozil_socket = socketio.AsyncClient(reconnection=True, reconnection_attempts=0)
+                    self.ozil_socket = socketio.AsyncClient(
+                        reconnection=True,
+                        reconnection_attempts=0,
+                        reconnection_delay=1,
+                        reconnection_delay_max=5,
+                        logger=logger
+                    )
                     
                     # Set up event handlers
-                    @self.ozil_socket.on('search_status')
-                    async def on_search_status(data):
-                        conversation_id = data.get('conversation_id')
-                        if conversation_id in self.active_conversations:
-                            await self.socket_manager.send_message(
-                                conversation_id,
-                                {
-                                    "done": False,
-                                    "type": "search_status",
-                                    "content": data["content"],
-                                    "sender": "ai"
-                                }
-                            )
-
-                    @self.ozil_socket.on('search_results')
-                    async def on_search_results(data):
-                        conversation_id = data.get('conversation_id')
-                        if conversation_id in self.active_conversations:
-                            # Save the message with products if available
-                            await self.save_message(
-                                conversation_id=conversation_id,
-                                content=data["content"],
-                                sender="ai",
-                                type="text",
-                                products=data.get("products", [])
-                            )
-                            
-                            # Forward to frontend
-                            await self.socket_manager.send_message(
-                                conversation_id,
-                                {
-                                    "done": data["done"],
-                                    "type": "search_results",
-                                    "content": data["content"],
-                                    "products": data.get("products", []),
-                                    "sender": "ai"
-                                }
-                            )
-
-                    @self.ozil_socket.on('search_error')
-                    async def on_search_error(data):
-                        conversation_id = data.get('conversation_id')
-                        if conversation_id in self.active_conversations:
-                            await self.save_message(
-                                conversation_id=conversation_id,
-                                content=data["content"],
-                                sender="ai",
-                                type="text"
-                            )
-                            
-                            await self.socket_manager.send_message(
-                                conversation_id,
-                                {
-                                    "done": True,
-                                    "type": "search_error",
-                                    "content": data["content"],
-                                    "sender": "ai"
-                                }
-                            )
-
-                    @self.ozil_socket.on('disconnect')
-                    async def on_disconnect():
-                        logger.warning("Disconnected from Ozil. Attempting to reconnect...")
-                        await asyncio.sleep(5)  # Wait before reconnect attempt
-
-                    # Connect to Ozil
-                    await self.ozil_socket.connect(self.ozil_url)
-                    logger.info("Successfully connected to Ozil service")
+                    @self.ozil_socket.on('connect')
+                    async def on_connect():
+                        logger.info("Successfully connected to Ozil service")
+                    
+                    @self.ozil_socket.on('connect_error')
+                    async def on_connect_error(data):
+                        logger.error(f"Connection error to Ozil service: {data}")
+                    
+                    # Your existing event handlers...
+                    
+                    # Connect to Ozil with timeout
+                    await asyncio.wait_for(
+                        self.ozil_socket.connect(self.ozil_url),
+                        timeout=10.0
+                    )
                 
-                # If connected, just wait and maintain connection
-                await asyncio.sleep(30)  # Check connection every 30 seconds
+                # If connected, maintain connection
+                await asyncio.sleep(30)
                 
+            except asyncio.TimeoutError:
+                logger.error("Timeout while connecting to Ozil service")
+                await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Error in Ozil socket connection: {str(e)}")
-                await asyncio.sleep(5)  # Wait before retry
+                await asyncio.sleep(5)
+                
+            if self.ozil_socket:
+                try:
+                    await self.ozil_socket.disconnect()
+                except:
+                    pass
+                self.ozil_socket = None
 
 
     async def process_response(self, parsed_response: Dict[str, Any], conversation_id: str):
