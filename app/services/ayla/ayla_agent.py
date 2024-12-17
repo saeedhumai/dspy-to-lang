@@ -1,13 +1,6 @@
-from langchain.chat_models.base import BaseChatModel
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.runnables.history import RunnableWithMessageHistory
+import dspy
 from langchain_mongodb import MongoDBChatMessageHistory
-from langchain_openai import ChatOpenAI
-from typing import Dict, Any
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_anthropic import ChatAnthropic
+from typing import Dict, Any, Optional
 from fastapi import HTTPException
 from bson.objectid import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -18,12 +11,23 @@ from configs.logger import logger
 from configs.settings import Settings
 from app.core.dima_http_client import DimaHttpClient
 from app.core.ayla_voice_processor import AudioProcessor
-from app.schemas.broker_schema import AgentType
 from app.core.diana_http_client import DianaHttpClient
 from app.socket_manger.socket_manager import SocketManager
 import socketio
 import asyncio
-from typing import Optional
+from app.services.ayla.dspy_config import DSPyManager
+
+# Define DSPy signatures for our chat system
+class ChatResponse(dspy.Signature):
+    """Process user requests for product quotes and confirm details before forwarding to Ozil."""
+    message: str = dspy.InputField(desc="User's input message")
+    ayla_response: str = dspy.OutputField(desc="Ayla's response to the user")
+    to_ozil: bool = dspy.OutputField(desc="Whether to forward to Ozil service")
+    ozil_message: Optional[str] = dspy.OutputField(desc="Message to send to Ozil containing confirmed details")
+    confirmation_status: str = dspy.OutputField(desc="Current confirmation status: 'product', 'quantity', 'supplier_type', or 'complete'")
+    confirmed_product: Optional[str] = dspy.OutputField(desc="Confirmed product name")
+    confirmed_quantity: Optional[int] = dspy.OutputField(desc="Confirmed quantity")
+    confirmed_supplier_type: Optional[str] = dspy.OutputField(desc="Confirmed supplier type (private/public/both)")
 
 class AylaAgentService:
     def __init__(self, 
@@ -40,18 +44,36 @@ class AylaAgentService:
         self.diana_client = diana_client
         self.audio_processor = audio_processor
         self.settings = settings
-        self.json_output_parser = JsonOutputParser()
         self.socket_manager = socket_manager
+        
+        # Configure DSPy with the appropriate LM
+        # self._configure_dspy()
+        
+        # Initialize chat processor with confirmation flow prompt
+        confirmation_prompt = """You are Ayla, a professional procurement assistant. Your task is to confirm product quote requests step by step.
 
-        # Initialize Ozil socket client at service level
-        self.ozil_socket: Optional[socketio.AsyncClient] = None
-        self.ozil_url = settings.OZIL_SERVICE_URL
-        self.active_conversations: Dict[str, bool] = {}
+Current confirmation status: {context.get('status', 'product')}
+Previously confirmed details:
+- Product: {context.get('product', 'Not confirmed')}
+- Quantity: {context.get('quantity', 'Not confirmed')}
+- Supplier Type: {context.get('supplier_type', 'Not confirmed')}
+
+User message: {message}
+
+Confirm one detail at a time in this order: product, quantity, then supplier type.
+If a detail is unclear, ask for clarification.
+Only move to the next detail after current one is confirmed.
+Once all details are confirmed, prepare a summary for Ozil.
+
+Remember:
+- Supplier type must be either 'private', 'public', or 'both'
+- Quantity must be a positive number
+- Product name should be specific and clear"""
+
+        self.chat_processor = dspy.ChainOfThought(ChatResponse)
+        self.chat_processor.preset_prompt = confirmation_prompt
         
-        # Initialize the socket connection
-        # asyncio.create_task(self.initialize_ozil_socket())
-        
-        # Provider-specific model configurations
+        # Provider configurations remain the same
         self.provider_models = {
             "claude": {
                 "models": ["claude-3-opus-20240229", "claude-3-sonnet-20240229"],
@@ -67,163 +89,39 @@ class AylaAgentService:
             }
         }
         
-        # Default provider recommendations per language
         self.recommended_providers = {
-            "ar": ["claude", "gemini", "openai"],    # Arabic preference order
-            "fa": ["gemini", "claude", "openai"],    # Persian preference order
-            "en": ["openai", "claude", "gemini"],    # English preference order
+            "ar": ["claude", "gemini", "openai"],
+            "fa": ["gemini", "claude", "openai"],
+            "en": ["openai", "claude", "gemini"],
         }
 
-    def create_llm(self, language: str = "en", provider: str = "openai", model: str = "gpt-4o") -> BaseChatModel:
-        """Create language-specific LLM instances from different providers"""
-        # If no provider specified, use the first recommended provider for the language
-        if not provider:
-            provider = self.recommended_providers.get(language, ["openai"])[0]
-        
-        # Validate provider
-        if provider not in self.provider_models:
-            provider = "openai"  # Default fallback
-            
-        model_config = self.provider_models[provider]
-        
-        # Find the model based on the model variable
-        model = model if model in model_config["models"] else model_config["default"]
-        
-        # Create the appropriate model instance based on provider
-        if provider == "claude":
-            return ChatAnthropic(
-                temperature=0.7,
-                model=model,
-                api_key=self.settings.ANTHROPIC_API_KEY
-            )
-        elif provider == "gemini":
-            return ChatGoogleGenerativeAI(
-                temperature=0.7,
-                model=model,
-                api_key=self.settings.GOOGLE_API_KEY
-            )
-        else:  # openai
-            return ChatOpenAI(
-                temperature=0.7,
-                model=model,
-                api_key=self.settings.OPENAI_API_KEY
-            )
+        self.dspy_manager = DSPyManager()
 
-    @property
-    def llm(self) -> BaseChatModel:
-        """Get LLM instance based on request parameters"""
-        # Get values from instance variables, set by handle_websocket_request
-        language = getattr(self, '_language', 'en')
-        provider = getattr(self, '_provider', 'openai')
-        model = getattr(self, '_model', 'gpt-4o')
-        return self.create_llm(language, provider, model)
-    
-    def _parse_result(self, result: str) -> Dict[str, any]:
-        try:
-            inner_json = self.json_output_parser.parse(result)
-            return inner_json
-        except Exception as e:
-            logger.info(f"Error parsing LLM response: {e}")
 
-    def create_chat_prompt(self, system_prompt: str=None, image_url: str=None) -> ChatPromptTemplate:
-
-        """Create specialized chat prompt template for medicine/supplement consultation"""
-        system_template = system_prompt or  """You are Ayla, an intelligent AI agent tasked with assisting users with their medicine needs. Your role involves processing user queries and generating responses only related to medicine.
-
-1. **Understanding User Queries:**
-   - Always confirm the user's intent: They want to search for a medicine or supplement through WhatsApp or Website.
-   - If the user uploads a prescription or a photo of medicine package. Analyze this image and do the following:
-    1. If it's a prescription, extract the medicine names list of strings format.
-    2. If it's a medicine package, or prescription, identify the medicine name.
-    3. If you can't identify the medicine name, just say "I couldn't identify the medicine name from the image."
-"""
-
-        system_template = system_template + """
-
-## Document Content:
-{document_content}
-
-## User Name:
-{name}
-
-## User Address:
-{address}
-
-## Conversation Example:
-User Query: "Search Panadol for me"
-Ayla Response: ```json
-{{
-    "to_ozil": false,
-    "ayla_response": "OK. Search Pharmacy Website or WhatsApp"
-}}
-```
-
-User Query: "WhatsApp"
-Ayla Response: ```json
-{{
-    "to_ozil": true,
-    "ozil_message": "Search Panadol"
-}}
-```
-
-User Query: "Website"
-Ayla Response: ```json
-{{
-    "to_ozil": true,
-    "ozil_message": "Search Panadol"
-}}
-```
-"""
-
-        human_message_content = []
-        # Construct the human message based on whether image_url is provided
-        
-        if image_url:
-            human_message_content.append({"type": "image_url", "image_url": {"url": "{image_url}"}})
-
-        human_message_content.append(
-            {"type": "text", "text": "{question}"}
-        )
-        return ChatPromptTemplate.from_messages([
-            ("system", system_template),
-            MessagesPlaceholder(variable_name="history"),
-            ("human", human_message_content)
-        ])
-
-    async def save_message(self, conversation_id: str, content: str, sender: str, type: str = None, file_url: str = "undefined", products: list = []) -> None:
-        """Save a message with optional metadata to the conversation history"""
+    async def save_message(self, conversation_id: str, content: str, sender: str, type: str = None) -> None:
+        """Save a message to the conversation history"""
         message_data = {
             "content": content,
             "sender": sender,
             "time": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
-            "file_url": file_url,
-            "type": type,
-            "products": products
-        } if sender == "ai" else {
-            "content": content,
-            "sender": sender,
-            "time": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
-            "type": type,
-            "file_url": file_url
+            "type": type
         }
         
         await self.db.conversations.update_one(
             {"_id": ObjectId(conversation_id)},
             {
                 "$push": {"messages": message_data},
-                "$setOnInsert": {
-                    "created_at": datetime.now(UTC)
-                },
+                "$setOnInsert": {"created_at": datetime.now(UTC)},
                 "$set": {"updated_at": datetime.now(UTC)}
             },
             upsert=True
         )
 
     def get_mongodb_history(self, conversation_id: str):
-        """Get or create MongoDB chat history instance"""
+        """Get MongoDB chat history instance"""
         try:
             return MongoDBChatMessageHistory(
-                connection_string = self.settings.MONGODB_URL,
+                connection_string=self.settings.MONGODB_URL,
                 database_name=self.settings.MONGODB_DB,
                 collection_name="chat_history",
                 session_id=conversation_id
@@ -232,132 +130,81 @@ Ayla Response: ```json
             logger.error(f"MongoDB connection error: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to connect to MongoDB: {str(e)}")
 
-    def setup_conversation_chain(self, system_prompt: str = None, image_url: str = None):
-        """Set up the conversation chain for medicine/supplement consultation"""
-        prompt = self.create_chat_prompt(system_prompt, image_url)
-        
-        chain = (
-            RunnablePassthrough()
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-        
-        return RunnableWithMessageHistory(
-            chain,
-            self.get_mongodb_history,
-            input_messages_key="question",
-            history_messages_key="history",
-            output_messages_key="output"
-        )
-
-
     async def handle_websocket_request(self, sid: str, request: AylaAgentRequest):
-        """Handle chat request via Socket.IO"""
-        # Set the language, provider and model from request
-        self._language = getattr(request, 'language', 'en')
-        self._provider = getattr(request, 'provider', 'openai')
-        self._model = getattr(request, 'model', 'gpt-4o')
+        """Handle chat request via Socket.IO using DSPy"""
+        logger.info(f"Processing request for user_id: {request.conversation_id}")
         
-        logger.info(f"Processing request for user: {request.name} with address: {request.address} : user_id: {request.conversation_id}")
-        type = "text"
-        transcribed_text = ""
-        # Process document if provided
-        document_content = ""
-        if request.document_url:
-            type = "file"
-            try:
-                if request.document_url.endswith(('.png', '.jpg', '.jpeg')):
-                    type = "image"
-                    request.image_url = request.document_url
-                else:
-                    document_content = await self.document_processor.process_document(request.document_url)
-            except Exception as e:
-                logger.error(f"Document processing error: {str(e)}")
+        # Get existing conversation state from database
+        conversation = await self.db.conversations.find_one({"_id": ObjectId(request.conversation_id)})
+        confirmation_context = conversation.get("confirmation_context", {}) if conversation else {}
         
-        if request.image_url:
-            type = "image"
-        
-        if request.audio_url:
-            type = "voice"
-            try:
-                transcribed_text = await self.audio_processor.transcribe_audio(request.audio_url)
-            except Exception as e:
-                logger.error(f"Error transcribing audio: {str(e)}")
-         
-        # Save human message
-        await self.save_message(
-            conversation_id=request.conversation_id,
-            content=request.message,
-            file_url=request.image_url or request.audio_url or request.document_url or "",
-            sender="human",
-            type=type
-        )
-        
-        conversation_chain = self.setup_conversation_chain(request.system_prompt, request.image_url)
-        query_to_send = (request.message or "") + " " + (transcribed_text or "")
         try:
-            parameters = {
-                "question": query_to_send,
-                "document_content": document_content,
-                "image_url": request.image_url if request.image_url else "",  # Ensure empty string if None
-                "name": request.name,
-                "address": request.address
-            }
+            logger.info("Configuring LM")
+            llm = self.dspy_manager.configure_default_lm(provider=request.provider, model=request.model, temperature=0.7)
 
-            # Only include image_url in parameters if it exists
-            if not parameters["image_url"]:
-                parameters.pop("image_url")
-            
-            response = conversation_chain.invoke(
-                parameters,
-                config={"configurable": {"session_id": request.conversation_id}}
+            logger.info(f"Using LM: {llm}")
+            # Process with DSPy
+            response = self.chat_processor(
+                message=request.message,
+                context=confirmation_context
             )
-
-            logger.info(f"LLM response: {response}")
-
-            parsed_response = self._parse_result(response)
-
-            if parsed_response["to_ozil"]:
-                await self.process_response(parsed_response, request.conversation_id)
+            logger.info(f"Response: {response}")
+            
+            # Save AI response
+            await self.save_message(
+                conversation_id=request.conversation_id,
+                content=response.ayla_response,
+                sender="ai",
+                type="text"
+            )
+            
+            # Update confirmation context in database
+            await self.db.conversations.update_one(
+                {"_id": ObjectId(request.conversation_id)},
+                {
+                    "$set": {
+                        "confirmation_context": {
+                            "status": response.confirmation_status,
+                            "product": response.confirmed_product,
+                            "quantity": response.confirmed_quantity,
+                            "supplier_type": response.confirmed_supplier_type
+                        }
+                    }
+                },
+                upsert=True
+            )
+            
+            # Only forward to Ozil if all confirmations are complete
+            if response.to_ozil and response.confirmation_status == "complete":
+                await self.process_response({
+                    "ayla_response": response.ayla_response,
+                    "ozil_message": response.ozil_message,
+                    "to_ozil": True
+                }, request.conversation_id)
             else:
-                await self.save_message(
-                    conversation_id=request.conversation_id,
-                    content=parsed_response["ayla_response"],
-                    sender="ai",
-                    type="text"
-                )
+                # Send direct response
                 await self.socket_manager.send_message(
                     request.conversation_id,
                     {
                         "done": True,
                         "type": "text",
-                        "content": parsed_response["ayla_response"],
+                        "content": response.ayla_response,
                         "sender": "ai"
                     }
                 )
-                
-            return
-                
         except Exception as e:
-                logger.error(f"Error updating parsed response: {str(e)}")
-                await self.save_message(
-                    conversation_id=request.conversation_id,
-                    content=parsed_response["ayla_response"],
-                    sender="ai",
-                    type="text"
-                )
-                await self.socket_manager.send_message(
-                    request.conversation_id,
-                    {
-                        "done": True,
-                        "type": "text",
-                        "content": parsed_response["ayla_response"],
-                        "sender": "ai"
-                    }
-                )
-                return
-
+            logger.error(f"Error in handle_websocket_request: {str(e)}")
+            # Save error message
+            await self.save_message(
+                conversation_id=request.conversation_id,
+                content=f"An error occurred while processing your request: {str(e)}",
+                sender="ai",
+                type="text"
+            )
+            await self.socket_manager.send_message(
+                request.conversation_id,
+                {"done": True, "type": "text", "content": "An error occurred while processing your request.", "sender": "ai"}
+            )
 
 
     async def initialize_ozil_socket(self):
@@ -449,14 +296,13 @@ Ayla Response: ```json
     async def process_response(self, parsed_response: Dict[str, Any], conversation_id: str):
         """Process response from LLM and dispatch to relevant agent."""
         try:
-            # Add conversation to active conversations
-            self.active_conversations[conversation_id] = True
+            # # Add conversation to active conversations
+            # self.active_conversations[conversation_id] = True
 
             # Add necessary data for Ozil
             ozil_message = {
                 "message": parsed_response.get("ozil_message", ""),
                 "name": parsed_response.get("user_name", ""),
-                "address": parsed_response.get("user_address", ""),
                 "conversation_id": conversation_id,
                 "language": getattr(self, '_language', 'en'),
                 "provider": getattr(self, '_provider', 'openai'),
@@ -499,8 +345,3 @@ Ayla Response: ```json
                     "sender": "ai"
                 }
             )
-        
-    async def cleanup_conversation(self, conversation_id: str):
-        """Cleanup when a conversation is done"""
-        if conversation_id in self.active_conversations:
-            del self.active_conversations[conversation_id]

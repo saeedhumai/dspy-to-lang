@@ -1,20 +1,33 @@
 from pydantic import BaseModel
-from typing import Optional, List, Dict
-from datetime import datetime
+from typing import Optional, List, Literal
 
 class AylaAgentRequest(BaseModel):
     message: Optional[str] = None
-    system_prompt: Optional[str] = None
-    diana_prompt: Optional[str] = None
-    name: Optional[str] = None
-    address: Optional[str] = None
-    document_url: Optional[str] = None # .pdf, .docx, .txt, etc.
-    audio_url: Optional[str] = None
-    image_url: Optional[str] = None
+    ayla_system_prompt: Optional[str] = None
     conversation_id: Optional[str] = None
     language: Optional[str] = "en"  # Language code (ar, fa, en)
-    provider: Optional[str] = "openai"  # LLM provider (claude, gemini, openai)
-    model: Optional[str] = "gpt-4o"  # LLM model (gpt-4o, gemini-1.5-pro, claude-3-opus-20240229, etc.)
+    provider: Optional[Literal["openai", "anthropic", "gemini"]] = "openai"
+    model: Optional[str] = "gpt-4"  # Model options based on provider
+
+    class Config:
+        model_config = {
+            "json_schema_extra": {
+                "examples": [
+                    {
+                        "provider": "openai",
+                        "model": "gpt-4",
+                    },
+                    {
+                        "provider": "anthropic",
+                        "model": "claude-3-opus-20240229",
+                    },
+                    {
+                        "provider": "gemini",
+                        "model": "gemini-1.5-pro",
+                    }
+                ]
+            }
+        }
 
 class DianaConversationLink(BaseModel):
     user_id: str

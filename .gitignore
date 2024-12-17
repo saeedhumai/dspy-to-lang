@@ -8,6 +8,8 @@ tests/index.html
 # C extensions
 *.so
 env_parm/
+venv-hupply
+venv-hupply/
 # Distribution / packaging
 .Python
 build/

@@ -3,7 +3,6 @@ from typing import Annotated
 from motor.motor_asyncio import AsyncIOMotorClient
 from redis import Redis
 from configs.settings import Settings, get_settings
-from langchain_openai import ChatOpenAI
 from app.services.ayla.ayla_agent import AylaAgentService
 from app.core.ayla_document_processor import AylaDocumentProcessor
 from app.core.image_processor import ImageProcessor
@@ -27,43 +26,17 @@ async def get_redis(
         password=settings.REDIS_PASSWORD,
         decode_responses=True
     )
+
 def get_audio_processor(
     settings: Annotated[Settings, Depends(get_settings)]
 ) -> AudioProcessor:
     return AudioProcessor(settings.GOOGLE_APPLICATION_CREDENTIALS)
 
-def get_streaming_llm(
-    settings: Annotated[Settings, Depends(get_settings)],
-    model: str = "gpt-4o"
-) -> ChatOpenAI:
-    """Get streaming-enabled LLM instance"""
-    return ChatOpenAI(
-        temperature=0.7,
-        model=model,
-        streaming=True,
-        api_key=settings.OPENAI_API_KEY
-    )
-
-def get_llm(
-    settings: Annotated[Settings, Depends(get_settings)],
-    model: str = "gpt-4o"
-) -> ChatOpenAI:
-    return ChatOpenAI(
-        temperature=0.7,
-        model=model,
-        api_key=settings.OPENAI_API_KEY
-    )
-
-openai_client = ChatOpenAI(api_key=get_settings().OPENAI_API_KEY, model="gpt-4o")
 
 async def get_redis_url(
     settings: Annotated[Settings, Depends(get_settings)]
 ) -> str:
     return f"redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}"
-
-def get_image_processor(
-) -> ImageProcessor:
-    return ImageProcessor(openai_client)
 
 def get_document_processor(
 ) -> AylaDocumentProcessor:
@@ -84,9 +57,6 @@ def get_diana_client(
         settings=settings,
         db=db
     )
-
-
-
 
 def get_ayla_agent(db: Annotated[AsyncIOMotorClient, Depends(get_db)]) -> AylaAgentService:
     return AylaAgentService(
