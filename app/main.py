@@ -7,28 +7,45 @@ from app.dependencies.depends import get_ayla_agent
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import clear_table_routes
 import asyncio
+from configs.logger import logger
+from app.core.ozil_client import OzilClient
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    settings = Settings()
-    db = AsyncIOMotorClient(settings.MONGODB_URL)[settings.MONGODB_DB]
-    socket_manager = initialize_socket_manager(db)
-    ayla_agent = get_ayla_agent(db)
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     # Startup
+#     settings = Settings()
+#     db = AsyncIOMotorClient(settings.MONGODB_URL)[settings.MONGODB_DB]
+#     socket_manager = initialize_socket_manager(db)
+#     ayla_agent = get_ayla_agent(db)
     
-    # Start the Ozil socket connection in the background
-    asyncio.create_task(ayla_agent.initialize_ozil_socket())
+#     # Start the Ozil socket connection in the background and store the task
+#     ozil_socket_task = asyncio.create_task(ayla_agent.ozil_client.initialize_socket())
     
-    # Mount socket manager
-    app.mount("/", socket_manager.app)
+#     # Wait briefly for initial connection
+#     try:
+#         await asyncio.wait_for(ayla_agent.ozil_client.wait_for_connection(), timeout=5.0)
+#     except asyncio.TimeoutError:
+#         logger.warning("Initial Ozil connection timed out, continuing startup anyway")
     
-    yield
+#     # Mount socket manager
+#     app.mount("/", socket_manager.app)
     
-    # Cleanup (if needed)
-    # Add any cleanup code here
+#     yield
+    
+#     # Cleanup
+#     if ozil_socket_task and not ozil_socket_task.done():
+#         ozil_socket_task.cancel()
+#         try:
+#             await ozil_socket_task
+#         except asyncio.CancelledError:
+#             pass
+    
+#     # Disconnect Ozil socket if connected
+#     if ayla_agent.ozil_client.ozil_socket and ayla_agent.ozil_client.ozil_socket.connected:
+#         await ayla_agent.ozil_client.ozil_socket.disconnect()
 
 # Create FastAPI application
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 # Add CORS middleware
 app.add_middleware(
@@ -40,5 +57,10 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# Include routers
-app.include_router(clear_table_routes.router)
+settings = Settings()
+db = AsyncIOMotorClient(settings.MONGODB_URL)[settings.MONGODB_DB]
+socket_manager = initialize_socket_manager(db)
+ozil_client = OzilClient(settings, socket_manager)
+asyncio.create_task(ozil_client.maintain_connection())
+
+app.mount("/", socket_manager.app)

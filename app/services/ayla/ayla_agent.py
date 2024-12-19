@@ -14,6 +14,7 @@ from app.socket_manger.socket_manager import SocketManager
 import socketio
 import asyncio
 from app.services.ayla.dspy_config import DSPyManager
+from app.core.ozil_client import OzilClient
 
 class ChatResponse(dspy.Signature):
     """Process user requests for product quotes step by step."""
@@ -44,15 +45,7 @@ class AylaAgentService:
         self.socket_manager = socket_manager
         self.chat_processor = dspy.ChainOfThought(ChatResponse)
         self.dspy_manager = DSPyManager()
-
-        # Initialize Ozil socket client at service level
-        self.ozil_socket: Optional[socketio.AsyncClient] = None
-        self.ozil_url = settings.OZIL_SERVICE_URL
-        self.active_conversations: Dict[str, bool] = {}
-        
-        # Initialize the socket connection
-        # asyncio.create_task(self.initialize_ozil_socket())
-
+        self.ozil_client = OzilClient(settings, socket_manager)
 
     async def get_active_conversation(self, user_id: str) -> Optional[Dict]:
         """Get the most recent incomplete conversation for a user"""
@@ -198,6 +191,17 @@ Confirmed Details:
                 logger.info("*********************************************************")
                 logger.info(f"Calling Ozil Process Response Method")
                 logger.info("*********************************************************")
+
+                # Send initial message to frontend
+                await self.socket_manager.send_message(
+                    request.user_id,
+                    {
+                        "done": False,
+                        "type": "text",
+                        "content": response.ayla_response,
+                        "sender": "ai"
+                    }
+                )
                 
                 await self.process_response({
                     "ayla_response": response.ayla_response,
@@ -205,7 +209,7 @@ Confirmed Details:
                     "quantity": response.confirmed_quantity,
                     "supplier_type": response.confirmed_supplier_type,
                     "to_ozil": True
-                }, conversation_id)
+                }, request.user_id)
             else:
                 await self.db.conversations.update_one(
                     {"_id": ObjectId(conversation_id)},
@@ -244,93 +248,12 @@ Confirmed Details:
                 {"done": True, "type": "text", "content": "An error occurred while processing your request.", "sender": "ai"}
             )
 
-    async def initialize_ozil_socket(self):
-        """Initialize and maintain persistent socket connection to Ozil"""
-        while True:
-            try:
-                if self.ozil_socket is None or not self.ozil_socket.connected:
-                    self.ozil_socket = socketio.AsyncClient(
-                        reconnection=True,
-                        reconnection_attempts=0,
-                        reconnection_delay=1,
-                        reconnection_delay_max=5,
-                        logger=logger
-                    )
-                    
-                    # Set up event handlers
-                    @self.ozil_socket.on('connect')
-                    async def on_connect():
-                        logger.info("Successfully connected to Ozil service")
-                    
-                    @self.ozil_socket.on('connect_error')
-                    async def on_connect_error(data):
-                        logger.error(f"Connection error to Ozil service: {data}")
-                    
-                    # Your existing event handlers...
-                    
-                    # Connect to Ozil with timeout
-                    await asyncio.wait_for(
-                        self.ozil_socket.connect(self.ozil_url),
-                        timeout=10.0
-                    )
-                
-                # If connected, maintain connection
-                await asyncio.sleep(30)
-                
-            except asyncio.TimeoutError:
-                logger.error("Timeout while connecting to Ozil service")
-                await asyncio.sleep(5)
-            except Exception as e:
-                logger.error(f"Error in Ozil socket connection: {str(e)}")
-                await asyncio.sleep(5)
-                
-            if self.ozil_socket:
-                try:
-                    await self.ozil_socket.disconnect()
-                except:
-                    pass
-                self.ozil_socket = None
-
-
-    async def process_response(self, parsed_response: Dict[str, Any], conversation_id: str):
+    async def process_response(self, parsed_response: Dict[str, Any], user_id: str):
         """Process response from LLM and dispatch to relevant agent."""
-        try:
-            # Add conversation to active conversations
-            self.active_conversations[conversation_id] = True
-
-            # Add necessary data for Ozil
-            ozil_message = {
-                "user_id": conversation_id,
-                "language": getattr(self, '_language', 'en'),
-                "provider": getattr(self, '_provider', 'openai'),
-                "model": getattr(self, '_model', 'gpt-4o')
-            }
-
-            # Send initial message to frontend
-            await self.socket_manager.send_message(
-                conversation_id,
-                {
-                    "done": False,
-                    "type": "text",
-                    "content": parsed_response["ayla_response"],
-                    "sender": "ai"
-                }
-            )
-
-            # If socket is connected, send message to Ozil
-            if self.ozil_socket and self.ozil_socket.connected:
-                await self.ozil_socket.emit('message_to_ozil', ozil_message)
-            else:
-                raise Exception("No connection to Ozil service")
-
-        except Exception as e:
-            logger.error(f"Error in process_response: {str(e)}")
-            await self.socket_manager.send_message(
-                conversation_id,
-                {
-                    "done": True,
-                    "type": "error",
-                    "content": "An error occurred while processing your request.",
-                    "sender": "ai"
-                }
-            )
+        await self.ozil_client.send_message(
+            parsed_response=parsed_response,
+            user_id=user_id,
+            language=getattr(self, '_language', 'en'),
+            provider=getattr(self, '_provider', 'openai'),
+            model=getattr(self, '_model', 'gpt-4o')
+        )
