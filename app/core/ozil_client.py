@@ -41,6 +41,15 @@ class OzilClient:
 
                 @self.ozil_socket.on('message_ack')
                 async def on_message_ack(data):
+                    await self.socket_manager.send_message(
+                        data['user_id'],
+                        {
+                            "done": True,
+                            "type": "text",
+                            "content": data,
+                            "sender": "ai"
+                        }
+                    )
                     logger.info(f"Message acknowledged by Ozil: {data}")
 
                 @self.ozil_socket.on('connect_error')
