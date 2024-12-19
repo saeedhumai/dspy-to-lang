@@ -79,43 +79,31 @@ class OzilClient:
                 logger.error(f"Error in maintain_connection: {str(e)}")
                 await asyncio.sleep(2)
 
-    async def send_message(self, parsed_response: Dict[str, Any], user_id: str, language: str = 'en', provider: str = 'openai', model: str = 'gpt-4'):
+    async def send_message(self, ozil_message):
         """Send message to Ozil service"""
         try:
             retry_count = 0
             max_retries = 3
             
-            while retry_count < max_retries:
-                try:
-                    if self.ozil_socket is None or not self.ozil_socket.connected:
-                        await self.initialize_socket()
-                    
-                    ozil_message = {
-                        "user_id": user_id,
-                        "message": parsed_response["ayla_response"],
-                        "product": parsed_response["product"],
-                        "quantity": parsed_response["quantity"],
-                        "supplier_type": parsed_response["supplier_type"],
-                        "language": language,
-                        "provider": provider,
-                        "model": model
-                    }
+            try:
+                if self.ozil_socket is None or not self.ozil_socket.connected:
+                    await self.initialize_socket()
 
-                    await self.ozil_socket.emit('message_to_ozil', ozil_message)
-                    logger.info("Message sent to Ozil successfully")
-                    return
-                    
-                except Exception as e:
-                    logger.error(f"Attempt {retry_count + 1} failed: {str(e)}")
-                    retry_count += 1
-                    await asyncio.sleep(1)
+                await self.ozil_socket.emit('message_to_ozil', ozil_message)
+                logger.info("Message sent to Ozil successfully")
+                return
+                
+            except Exception as e:
+                logger.error(f"Attempt {retry_count + 1} failed: {str(e)}")
+                retry_count += 1
+                await asyncio.sleep(1)
                     
             raise Exception("Failed to send message after multiple attempts")
 
         except Exception as e:
             logger.error(f"Error in send_message: {str(e)}")
             await self.socket_manager.send_message(
-                user_id,
+                ozil_message['user_id'],
                 {
                     "done": True,
                     "type": "error",

@@ -11,8 +11,6 @@ from app.core.dima_http_client import DimaHttpClient
 from app.core.ayla_voice_processor import AudioProcessor
 from app.core.diana_http_client import DianaHttpClient
 from app.socket_manger.socket_manager import SocketManager
-import socketio
-import asyncio
 from app.services.ayla.dspy_config import DSPyManager
 from app.core.ozil_client import OzilClient
 
@@ -22,14 +20,14 @@ class ChatResponse(dspy.Signature):
     messages: list = dspy.InputField(desc="Conversation history")
     ayla_response: str = dspy.OutputField(desc="Ayla's response to the user")
     to_ozil: bool = dspy.OutputField(desc="Whether to forward to Ozil service")
-    confirmation_status: str = dspy.OutputField(desc="Current confirmation status: 'product', 'quantity', 'supplier_type', or 'complete'")
-    confirmed_product: Optional[str] = dspy.OutputField(desc="Confirmed product name")
-    confirmed_quantity: Optional[int] = dspy.OutputField(desc="Confirmed quantity")
-    confirmed_supplier_type: Optional[str] = dspy.OutputField(desc="Confirmed supplier type (private/public/both)")
+    status: str = dspy.OutputField(desc="Current status: 'product', 'quantity', 'supplier_type', or 'complete'")
+    product_name: Optional[str] = dspy.OutputField(desc="Processed product name")
+    quantity: Optional[int] = dspy.OutputField(desc="Processed quantity")
+    supplier_type: Optional[str] = dspy.OutputField(desc="Processed supplier type (private/public/both)")
 
 class AylaAgentService:
     def __init__(self, 
-                 db: AsyncIOMotorClient, 
+                 db: AsyncIOMotorClient,
                  document_processor: AylaDocumentProcessor,
                  audio_processor: AudioProcessor,
                  socket_manager: SocketManager,
@@ -104,33 +102,41 @@ class AylaAgentService:
         else:
             conversation_id = str(conversation["_id"])
 
+        # Save user message first
+        await self.save_message(
+            conversation_id=conversation_id,
+            content=request.message,
+            sender="user",
+            type="text"
+        )
+
         confirmation_context = conversation.get("confirmation_context", {})
         
         # Get conversation history and format it for DSPy
         messages = [
             {
                 "role": "system",
-                "content": """You are Ayla, a professional procurement assistant. Your task is to confirm product quote requests step by step, one detail at a time.
+                "content": """You are Ayla, a professional procurement assistant. Your task is to process product quote requests step by step, one detail at a time.
 
 IMPORTANT RULES:
-1. You must confirm ONE detail at a time in this exact order: product → quantity → supplier type
-2. Do not move to the next detail until the current one is explicitly confirmed by the user
+1. You must process ONE detail at a time in this exact order: product → quantity → supplier type
+2. Do not move to the next detail until the current one is explicitly answered by the user
 3. For each detail:
    - Product: Ask for specific product name/details if unclear
    - Quantity: Must be a positive number
    - Supplier Type: Must be exactly 'private', 'public', or 'both'
-4. Set confirmation_status based on which detail you're currently confirming
-5. Only set to_ozil=True when all details are confirmed
+4. Set status based on which detail you're currently processing
+5. Only set to_ozil=True when all details are processed
 
 Current Status: {status}
-Confirmed Details:
+Processed Details:
 - Product: {product}
 - Quantity: {quantity}
 - Supplier Type: {supplier_type}""".format(
                     status=confirmation_context.get("status", "product"),
-                    product=confirmation_context.get("product", "Not confirmed"),
-                    quantity=confirmation_context.get("quantity", "Not confirmed"),
-                    supplier_type=confirmation_context.get("supplier_type", "Not confirmed")
+                    product=confirmation_context.get("product", "Not processed"),
+                    quantity=confirmation_context.get("quantity", "Not processed"),
+                    supplier_type=confirmation_context.get("supplier_type", "Not processed")
                 )
             }
         ]
@@ -160,7 +166,7 @@ Confirmed Details:
                 message=request.message,
                 messages=messages
             )
-            logger.info(f"Response: {response}")
+            logger.info(f"Response: {response}\n type: {type(response)}")
             
             # Save AI response
             await self.save_message(
@@ -170,7 +176,7 @@ Confirmed Details:
                 type="text"
             )
             
-            if response.to_ozil and response.confirmation_status == "complete":
+            if response.to_ozil and response.status == "complete":
                 # Mark current conversation as complete
                 await self.db.conversations.update_one(
                     {"_id": ObjectId(conversation_id)},
@@ -180,9 +186,9 @@ Confirmed Details:
                             "completed_at": datetime.now(UTC),
                             "confirmation_context": {
                                 "status": "complete",
-                                "product": response.confirmed_product,
-                                "quantity": response.confirmed_quantity,
-                                "supplier_type": response.confirmed_supplier_type
+                                "product": response.product_name,
+                                "quantity": response.quantity,
+                                "supplier_type": response.supplier_type
                             }
                         }
                     }
@@ -202,24 +208,25 @@ Confirmed Details:
                         "sender": "ai"
                     }
                 )
+
+                response.user_id = request.user_id
+                response.language = request.language if request.language else "en"
+                response.provider = request.provider if request.provider else "openai"
+                response.model = request.model if request.model else "gpt-4o"
+
+                response = response.toDict()
                 
-                await self.process_response({
-                    "ayla_response": response.ayla_response,
-                    "product": response.confirmed_product,
-                    "quantity": response.confirmed_quantity,
-                    "supplier_type": response.confirmed_supplier_type,
-                    "to_ozil": True
-                }, request.user_id)
+                await self.process_response(response)
             else:
                 await self.db.conversations.update_one(
                     {"_id": ObjectId(conversation_id)},
                     {
                         "$set": {
                             "confirmation_context": {
-                                "status": response.confirmation_status,
-                                "product": response.confirmed_product,
-                                "quantity": response.confirmed_quantity,
-                                "supplier_type": response.confirmed_supplier_type
+                                "status": response.status,
+                                "product": response.product_name,
+                                "quantity": response.quantity,
+                                "supplier_type": response.supplier_type
                             }
                         }
                     }
@@ -248,12 +255,8 @@ Confirmed Details:
                 {"done": True, "type": "text", "content": "An error occurred while processing your request.", "sender": "ai"}
             )
 
-    async def process_response(self, parsed_response: Dict[str, Any], user_id: str):
+    async def process_response(self, ozil_message: Dict[str, Any]):
         """Process response from LLM and dispatch to relevant agent."""
         await self.ozil_client.send_message(
-            parsed_response=parsed_response,
-            user_id=user_id,
-            language=getattr(self, '_language', 'en'),
-            provider=getattr(self, '_provider', 'openai'),
-            model=getattr(self, '_model', 'gpt-4o')
+            ozil_message=ozil_message
         )
