@@ -9,6 +9,9 @@ from app.api import clear_table_routes
 import asyncio
 from configs.logger import logger
 from app.core.ozil_client import OzilClient
+from dotenv import load_dotenv
+
+load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
