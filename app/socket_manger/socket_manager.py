@@ -34,6 +34,30 @@ class SocketManager:
     async def handle_connect(self, sid, environ):
         """Handle new socket.io connections"""
         logger.info(f"New Socket.IO connection: {sid}")
+    
+    # async def handle_connect(self, sid, environ):
+    #     """Handle new socket.io connections"""
+    #     try:
+    #         # Parse query string to get user_id
+    #         query = environ.get('query_string', b'').decode()
+    #         params = dict(param.split('=') for param in query.split('&') if param)
+    #         user_id = params.get('user_id')
+            
+    #         logger.info(f"New Socket.IO connection: {sid} for user: {user_id}")
+            
+    #         if user_id:
+    #             # Store the connection
+    #             await self.connect(sid, user_id)
+                
+    #             # Send welcome message
+    #             from app.dependencies.depends import get_ayla_agent
+    #             ayla_agent = get_ayla_agent(db=self.db)
+    #             await ayla_agent.send_welcome_message(user_id)
+    #         else:
+    #             logger.warning(f"Connection attempt without user_id: {sid}")
+                
+    #     except Exception as e:
+    #         logger.error(f"Error in handle_connect: {str(e)}")
 
     async def handle_disconnect(self, sid):
         """Handle socket.io disconnections"""

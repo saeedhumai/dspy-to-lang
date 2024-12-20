@@ -22,8 +22,15 @@ class ChatResponse(dspy.Signature):
     to_ozil: bool = dspy.OutputField(desc="Whether to forward to Ozil service")
     status: str = dspy.OutputField(desc="Current status: 'product', 'quantity', 'supplier_type', or 'complete'")
     product_name: Optional[str] = dspy.OutputField(desc="Processed product name")
+    product_category: Optional[str] = dspy.OutputField(desc="Processed product category")
     quantity: Optional[int] = dspy.OutputField(desc="Processed quantity")
     supplier_type: Optional[str] = dspy.OutputField(desc="Processed supplier type (private/public/both)")
+    brand: Optional[str] = dspy.OutputField(desc="Processed brand name")
+    model: Optional[str] = dspy.OutputField(desc="Processed model name")
+    description: Optional[str] = dspy.OutputField(desc="Processed description")
+    delivery_location: Optional[str] = dspy.OutputField(desc="Processed delivery location")
+    preferred_delivery_timeline: Optional[str] = dspy.OutputField(desc="Processed preferred delivery timeline")
+    supplier_list_name: Optional[str] = dspy.OutputField(desc="Processed supplier list name")
 
 class AylaAgentService:
     def __init__(self, 
@@ -65,8 +72,15 @@ class AylaAgentService:
             "confirmation_context": {
                 "status": "product",
                 "product": None,
+                "product_category": None,
                 "quantity": None,
-                "supplier_type": None
+                "supplier_type": None,
+                "brand": None,
+                "model": None,
+                "description": None,
+                "delivery_location": None,
+                "preferred_delivery_timeline": None,
+                "supplier_list_name": None
             }
         })
         return str(result.inserted_id)
@@ -119,24 +133,50 @@ class AylaAgentService:
                 "content": """You are Ayla, a professional procurement assistant. Your task is to process product quote requests step by step, one detail at a time.
 
 IMPORTANT RULES:
-1. You must process ONE detail at a time in this exact order: product → quantity → supplier type
+1. You must process one detail at a time in this exact order: product → quantity → supplier type
 2. Do not move to the next detail until the current one is explicitly answered by the user
 3. For each detail:
+    **Required:**
    - Product: Ask for specific product name/details if unclear
    - Quantity: Must be a positive number
    - Supplier Type: Must be exactly 'private', 'public', or 'both'
+
+    **Optional:**
+   - Brand: Ask for specific brand name if unclear
+   - Model: Ask for specific model name if unclear
+   - Description: Ask for specific description if unclear
+   - Delivery Location: Ask for specific delivery location if unclear
+   - Preferred Delivery Timeline: Ask for specific delivery timeline if unclear
+   - Supplier List Name: Ask for specific supplier list name if unclear
+
 4. Set status based on which detail you're currently processing
+5. For Optional fields ask from user if they want to provide it or not. If they don't want to provide it, set it to None and set_to_ozil to True.
 5. Only set to_ozil=True when all details are processed
 
 Current Status: {status}
 Processed Details:
 - Product: {product}
+- Product Category: {product_category}
 - Quantity: {quantity}
-- Supplier Type: {supplier_type}""".format(
+- Supplier Type: {supplier_type}
+- Brand: {brand}
+- Model: {model}
+- Description: {description}
+- Delivery Location: {delivery_location}
+- Preferred Delivery Timeline: {preferred_delivery_timeline}
+- Supplier List Name: {supplier_list_name}
+""".format(
                     status=confirmation_context.get("status", "product"),
                     product=confirmation_context.get("product", "Not processed"),
+                    product_category=confirmation_context.get("product_category", "Not processed"),
                     quantity=confirmation_context.get("quantity", "Not processed"),
-                    supplier_type=confirmation_context.get("supplier_type", "Not processed")
+                    supplier_type=confirmation_context.get("supplier_type", "Not processed"),
+                    brand=confirmation_context.get("brand", "Not processed"),
+                    model=confirmation_context.get("model", "Not processed"),
+                    description=confirmation_context.get("description", "Not processed"),
+                    delivery_location=confirmation_context.get("delivery_location", "Not processed"),
+                    preferred_delivery_timeline=confirmation_context.get("preferred_delivery_timeline", "Not processed"),
+                    supplier_list_name=confirmation_context.get("supplier_list_name", "Not processed")
                 )
             }
         ]
@@ -166,7 +206,7 @@ Processed Details:
                 message=request.message,
                 messages=messages
             )
-            logger.info(f"Response: {response}\n type: {type(response)}")
+            logger.info(f"Response: {response}")
             
             # Save AI response
             await self.save_message(
@@ -187,8 +227,15 @@ Processed Details:
                             "confirmation_context": {
                                 "status": "complete",
                                 "product": response.product_name,
+                                "product_category": response.product_category,
                                 "quantity": response.quantity,
-                                "supplier_type": response.supplier_type
+                                "supplier_type": response.supplier_type,
+                                "brand": response.brand,
+                                "model": response.model,
+                                "description": response.description,
+                                "delivery_location": response.delivery_location,
+                                "preferred_delivery_timeline": response.preferred_delivery_timeline,
+                                "supplier_list_name": response.supplier_list_name
                             }
                         }
                     }
@@ -225,8 +272,15 @@ Processed Details:
                             "confirmation_context": {
                                 "status": response.status,
                                 "product": response.product_name,
+                                "product_category": response.product_category,
                                 "quantity": response.quantity,
-                                "supplier_type": response.supplier_type
+                                "supplier_type": response.supplier_type,
+                                "brand": response.brand,
+                                "model": response.model,
+                                "description": response.description,
+                                "delivery_location": response.delivery_location,
+                                "preferred_delivery_timeline": response.preferred_delivery_timeline,
+                                "supplier_list_name": response.supplier_list_name
                             }
                         }
                     }

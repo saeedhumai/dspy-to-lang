@@ -46,7 +46,7 @@ class OzilClient:
                         {
                             "done": True,
                             "type": "text",
-                            "content": data,
+                            "content": data.get('content', ''),
                             "sender": "ai"
                         }
                     )
