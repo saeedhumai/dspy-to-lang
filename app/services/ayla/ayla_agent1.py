@@ -1,4 +1,3 @@
-import dspy
 from typing import Dict, Any, Optional
 from bson.objectid import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
