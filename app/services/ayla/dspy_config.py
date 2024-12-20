@@ -2,6 +2,7 @@ import os
 import dspy
 from typing import Optional
 from configs.logger import logger
+from configs.settings import get_settings
 class DSPyManager:
     def __init__(self):
         self.lm_configs = {
@@ -24,9 +25,9 @@ class DSPyManager:
         
         # Initialize API keys from environment variables
         self.api_keys = {
-            "openai": os.getenv("OPENAI_API_KEY"),
-            "anthropic": os.getenv("ANTHROPIC_API_KEY"),
-            "gemini": os.getenv("GOOGLE_API_KEY")
+            "openai": get_settings().OPENAI_API_KEY,
+            "anthropic": get_settings().ANTHROPIC_API_KEY,
+            "gemini": get_settings().GOOGLE_API_KEY
         }
 
     def get_lm(self, provider: str, model: str, temperature: float = 0.7) -> Optional[dspy.LM]:
