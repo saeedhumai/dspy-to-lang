@@ -141,7 +141,7 @@ IMPORTANT RULES:
    - Quantity: Must be a positive number
    - Supplier Type: Must be exactly 'private', 'public', or 'both'
 
-    **Optional:**
+    **Optional:** Make `to_ozil=True` if user don't want to provide provide optional details.
    - Brand: Ask for specific brand name if unclear
    - Model: Ask for specific model name if unclear
    - Description: Ask for specific description if unclear
@@ -150,8 +150,7 @@ IMPORTANT RULES:
    - Supplier List Name: Ask for specific supplier list name if unclear
 
 4. Set status based on which detail you're currently processing
-5. For Optional fields ask from user if they want to provide it or not. If they don't want to provide it, set it to None and set_to_ozil to True.
-5. Only set to_ozil=True when all details are processed
+5. Only set to_ozil=True user don't want to provide optional details or all details are processed. Based on User Input.
 
 Current Status: {status}
 Processed Details:
