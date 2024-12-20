@@ -79,10 +79,10 @@ class OzilClient:
                 if self.ozil_socket is None or not self.ozil_socket.connected:
                     await self.initialize_socket()
                 
-                await asyncio.sleep(5)
+                await asyncio.sleep(30)
                 
-                if self.ozil_socket and self.ozil_socket.connected:
-                    await self.ozil_socket.emit('ping')
+                # if self.ozil_socket and self.ozil_socket.connected:
+                #     await self.ozil_socket.emit('ping')
                     
             except Exception as e:
                 logger.error(f"Error in maintain_connection: {str(e)}")
