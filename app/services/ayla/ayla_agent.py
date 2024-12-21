@@ -87,12 +87,15 @@ class AylaAgentService:
                
         try:
             # Get active conversation or create new one
+            logger.info(f"Getting active conversation for user_id: {user_id}")
             conversation = await self.get_active_conversation(user_id)
             
             if not conversation:
+                logger.info(f"No active conversation found for user_id: {user_id}. Creating new conversation.")
                 conversation_id = await self.create_new_conversation(user_id)
                 conversation = await self.db.conversations.find_one({"_id": ObjectId(conversation_id)})
             else:
+                logger.info(f"Active conversation found for user_id: {user_id}.")
                 conversation_id = str(conversation["_id"])
 
 
@@ -105,9 +108,6 @@ class AylaAgentService:
                 provider=provider,
                 model=model
             )
-            
-            # Create a new conversation for the welcome message
-            conversation_id = await self.create_new_conversation(user_id)
             
             # # Save the welcome message
             # await self.save_message(
