@@ -7,7 +7,7 @@ class DSPyManager:
     def __init__(self):
         self.lm_configs = {
             "openai": {
-                "gpt-4": "openai/gpt-4",
+                "gpt-4o-mini": "openai/gpt-4o-mini",
                 "gpt-4o-mini": "openai/gpt-4o-mini",
                 "gpt-4-turbo": "openai/gpt-4-turbo-preview",
                 "gpt-3.5-turbo": "openai/gpt-3.5-turbo"
@@ -52,7 +52,7 @@ class DSPyManager:
         
         return None
 
-    def configure_default_lm(self, provider: str = "openai", model: str = "gpt-4", temperature: float = 0.7):
+    def configure_default_lm(self, provider: str = "openai", model: str = "gpt-4o-mini", temperature: float = 0.7):
         """
         Configure the default LM for DSPy
         """

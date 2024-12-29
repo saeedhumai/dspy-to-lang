@@ -42,5 +42,13 @@ Real-time chat interface for Ayla Agent with WebSocket support.
 - Check MongoDB connection
 - Validate OpenAI API key
 - Check server logs for errors
+- Enable browser console (F12) to see detailed error messages
+
+## Common Fixes
+
+- Clear browser cache and localStorage
+- Try using direct WebSocket transport
+- Verify model name matches backend configuration
+- Check CORS settings if running on different ports
 
 Requirements: Python 3.8+, MongoDB

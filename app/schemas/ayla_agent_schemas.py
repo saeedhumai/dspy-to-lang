@@ -6,7 +6,7 @@ class AylaAgentRequest(BaseModel):
     user_id: Optional[str] = None
     language: Optional[str] = "en"  # Language code (ar, fa, en)
     provider: Optional[Literal["openai", "anthropic", "gemini"]] = "openai"
-    model: Optional[str] = "gpt-4"  # Model options based on provider
+    model: Optional[str] = "gpt-4o-mini"  # Model options based on provider
 
     class Config:
         model_config = {
@@ -14,7 +14,7 @@ class AylaAgentRequest(BaseModel):
                 "examples": [
                     {
                         "provider": "openai",
-                        "model": "gpt-4",
+                        "model": "gpt-4o-mini",
                     },
                     {
                         "provider": "anthropic",
