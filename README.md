@@ -1,52 +1,46 @@
-# Hupply Agent Ayla
+# Ayla Agent Chat Interface
 
+Real-time chat interface for Ayla Agent with WebSocket support.
 
-- FastAPI-based backend
-- Integration with various AI models (Anthropic, OpenAI, Google AI)
-- MongoDB and Redis support
-- WebSocket capabilities
-- Advanced networking and HTTP handling
+## Quick Start
 
-## Prerequisites
+1. **Install Dependencies**
 
-- Python 3.8+
-- pip package manager
-- MongoDB (optional)
-- Redis (optional)
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-## Installation
+2. **Setup Environment**
+   Create `.env`:
 
-1. Clone the repository:
-```bash
-git clone git@github.com:humai-ae/hupply_Agent_ayla.git
-```
+   ```env
+   OPENAI_API_KEY=your_key
+   MONGODB_URL=your_mongodb_url
+   ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+3. **Run Backend**
 
-## Usage
+   ```bash
+   uvicorn app.main:app --host 0.0.0.0 --port 5001 --reload --log-level debug
+   ```
 
-=
+4. **Launch Frontend**
+   - Open `tests/index.html` in browser
+   - Or run: `python -m http.server 8000`
+   - Visit: `http://localhost:8000/index.html`
 
-2. Run the application:
-```bash
-uvicorn app.main:app --reload
-```
+## Features
 
-## Dependencies
+- Auto-generated conversation IDs
+- Real-time messaging
+- Session persistence
+- Error handling
 
-Key dependencies include:
-- FastAPI
-- LangChain
-- Anthropic
-- OpenAI
-- Google AI
-- MongoDB
-- Redis
-- Socket.IO
+## Troubleshooting
 
-For a complete list of dependencies, see `requirements.txt`.
+- Verify backend is running on port 5001
+- Check MongoDB connection
+- Validate OpenAI API key
+- Check server logs for errors
 
-
+Requirements: Python 3.8+, MongoDB
