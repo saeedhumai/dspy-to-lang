@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Hupply Agent Test Interface</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 0 20px;
+            background-color: #f5f5f5;
+        }
+        .agents-container {
+            display: flex;
+            gap: 20px;
+        }
+        .chat-container {
+            flex: 1;
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .message-container {
+            height: 500px;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            margin-left: 20%;
+        }
+        .ai-message {
+            background-color: #f5f5f5;
+            margin-right: 20%;
+        }
+        .status-message {
+            color: #666;
+            font-style: italic;
+            text-align: center;
+            background-color: #fff3e0;
+        }
+        .input-container {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        input {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #2196f3;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #1976d2;
+        }
+        .connection-status {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding: 5px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .connected {
+            background-color: #4caf50;
+        }
+        .disconnected {
+            background-color: #f44336;
+        }
+        .rfq-card {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .supplier-card {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="agents-container">
+        <!-- Ayla Agent Container -->
+        <div class="chat-container">
+            <div class="connection-status">
+                <h2>Ayla Agent</h2>
+                <div>
+                    <span class="status-indicator disconnected" id="aylaStatus"></span>
+                    <span id="aylaStatusText">Disconnected</span>
+                </div>
+            </div>
+            <div class="message-container" id="aylaMessageContainer"></div>
+            <div class="input-container">
+                <input type="text" id="aylaMessageInput" placeholder="Type your message to Ayla..." />
+                <button onclick="sendToAyla()">Send</button>
+            </div>
+        </div>
+
+        <!-- Ozil Agent Container -->
+        <div class="chat-container">
+            <div class="connection-status">
+                <h2>Ozil Agent</h2>
+                <div>
+                    <span class="status-indicator disconnected" id="ozilStatus"></span>
+                    <span id="ozilStatusText">Disconnected</span>
+                </div>
+            </div>
+            <div class="message-container" id="ozilMessageContainer"></div>
+            <div class="input-container">
+                <input type="text" id="ozilMessageInput" placeholder="Type your message to Ozil..." />
+                <button onclick="sendToOzil()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const userId = '674850197227b000090d5c3f';
+        let aylaSocket, ozilSocket;
+
+        // Initialize Ayla Socket
+        function initAylaSocket() {
+            aylaSocket = io('http://0.0.0.0:5001', {
+                path: '/socket.io',
+                transports: ['websocket', 'polling'],
+                autoConnect: true,
+                reconnection: true,
+                withCredentials: true
+            });
+
+            aylaSocket.on('connect', () => {
+                updateConnectionStatus('ayla', true);
+                addMessage('aylaMessageContainer', 'System', 'Connected to Ayla server', 'status-message');
+            });
+
+            aylaSocket.on('disconnect', () => {
+                updateConnectionStatus('ayla', false);
+                addMessage('aylaMessageContainer', 'System', 'Disconnected from Ayla server', 'status-message');
+            });
+
+            aylaSocket.on('message', (data) => {
+                handleAylaMessage(data);
+            });
+        }
+
+        // Initialize Ozil Socket
+        function initOzilSocket() {
+            ozilSocket = io('http://0.0.0.0:8000', {
+                path: '/socket.io',
+                transports: ['websocket', 'polling'],
+                autoConnect: true,
+                reconnection: true,
+                withCredentials: true
+            });
+
+            ozilSocket.on('connect', () => {
+                updateConnectionStatus('ozil', true);
+                addMessage('ozilMessageContainer', 'System', 'Connected to Ozil server', 'status-message');
+            });
+
+            ozilSocket.on('disconnect', () => {
+                updateConnectionStatus('ozil', false);
+                addMessage('ozilMessageContainer', 'System', 'Disconnected from Ozil server', 'status-message');
+            });
+
+            ozilSocket.on('message_ack', (data) => {
+                handleOzilMessage(data);
+            });
+        }
+
+        function updateConnectionStatus(agent, connected) {
+            const statusDot = document.getElementById(`${agent}Status`);
+            const statusText = document.getElementById(`${agent}StatusText`);
+            
+            statusDot.className = `status-indicator ${connected ? 'connected' : 'disconnected'}`;
+            statusText.textContent = connected ? 'Connected' : 'Disconnected';
+        }
+
+        function handleAylaMessage(data) {
+            if (data.type === 'text') {
+                addMessage('aylaMessageContainer', 'Ayla', data.content, 'ai-message');
+            } else if (data.type === 'error') {
+                addMessage('aylaMessageContainer', 'System', data.content, 'status-message');
+            }
+
+            if (data.rfq) {
+                displayRFQ('aylaMessageContainer', data.rfq);
+            }
+        }
+
+        function handleOzilMessage(data) {
+            if (data.type === 'text') {
+                addMessage('ozilMessageContainer', 'Ozil', data.content, 'ai-message');
+            } else if (data.type === 'message_ack') {
+                addMessage('ozilMessageContainer', 'Ozil', data.content, 'ai-message');
+            }
+
+            if (data.suppliers) {
+                displaySuppliers('ozilMessageContainer', data.suppliers);
+            }
+        }
+
+        function sendToAyla() {
+            const messageInput = document.getElementById('aylaMessageInput');
+            const message = messageInput.value.trim();
+
+            if (!message) return;
+
+            addMessage('aylaMessageContainer', 'You', message, 'user-message');
+            
+            aylaSocket.emit('chat_message', {
+                message: message,
+                user_id: userId,
+                language: 'en',
+                provider: 'openai',
+                model: 'gpt-4o'
+            });
+
+            messageInput.value = '';
+        }
+
+        function sendToOzil() {
+            const messageInput = document.getElementById('ozilMessageInput');
+            const message = messageInput.value.trim();
+
+            if (!message) return;
+
+            addMessage('ozilMessageContainer', 'You', message, 'user-message');
+            
+            ozilSocket.emit('message_to_ozil', {
+                content: message,
+                user_id: userId,
+            });
+
+            messageInput.value = '';
+        }
+
+        function addMessage(containerId, sender, content, className) {
+            const messageContainer = document.getElementById(containerId);
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${className}`;
+            messageDiv.textContent = `${sender}: ${content}`;
+            messageContainer.appendChild(messageDiv);
+            messageContainer.scrollTop = messageContainer.scrollHeight;
+        }
+
+        function displayRFQ(containerId, rfq) {
+            const container = document.getElementById(containerId);
+            const rfqDiv = document.createElement('div');
+            rfqDiv.className = 'rfq-card';
+            rfqDiv.innerHTML = `
+                <h4>RFQ Details</h4>
+                <p>Product: ${rfq.product_name}</p>
+                <p>Quantity: ${rfq.quantity}</p>
+                <p>Supplier Type: ${rfq.supplier_type}</p>
+                ${rfq.delivery_location ? `<p>Delivery: ${rfq.delivery_location}</p>` : ''}
+                ${rfq.preferred_delivery_timeline ? `<p>Timeline: ${rfq.preferred_delivery_timeline}</p>` : ''}
+            `;
+            container.appendChild(rfqDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function displaySuppliers(containerId, suppliers) {
+            const container = document.getElementById(containerId);
+            suppliers.forEach(supplier => {
+                const supplierDiv = document.createElement('div');
+                supplierDiv.className = 'supplier-card';
+                supplierDiv.innerHTML = `
+                    <h4>${supplier.name}</h4>
+                    <p>Rating: ${supplier.rating}</p>
+                    <p>Location: ${supplier.location}</p>
+                `;
+                container.appendChild(supplierDiv);
+            });
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // Handle enter key in message inputs
+        document.getElementById('aylaMessageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendToAyla();
+        });
+
+        document.getElementById('ozilMessageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendToOzil();
+        });
+
+        // Initialize sockets
+        initAylaSocket();
+        initOzilSocket();
+    </script>
+</body>
+</html>
