@@ -15,10 +15,10 @@
       .container {
         display: flex;
         gap: 20px;
-        max-height: 600px;
+        max-height: 500px;
       }
       .chat-container {
-        flex: 2;
+        flex: 3;
         background: white;
         border-radius: 10px;
         padding: 15px;
@@ -26,6 +26,8 @@
       }
       .log-container {
         flex: 1;
+        min-width: 300px;
+        max-width: 400px;
         background: #1e1e1e;
         color: #fff;
         border-radius: 10px;
@@ -34,7 +36,7 @@
       }
       .message-container,
       .log-messages {
-        height: 400px;
+        height: 350px;
         overflow-y: auto;
         padding: 8px;
         margin-bottom: 15px;
@@ -68,19 +70,22 @@
         background-color: #fff3e0;
       }
       .log-entry {
-        margin: 3px 0;
-        padding: 3px;
+        font-family: "Consolas", monospace;
+        font-size: 11px;
+        padding: 2px 5px;
         border-bottom: 1px solid #3d3d3d;
-        line-height: 1.2;
+        white-space: pre-wrap;
       }
-      .log-info {
-        color: #4caf50;
-      }
-      .log-error {
-        color: #f44336;
+      .log-warning {
+        color: #ffc107;
       }
       .log-debug {
-        color: #2196f3;
+        color: #03a9f4;
+      }
+      .log-container h2 {
+        font-size: 16px;
+        margin-bottom: 10px;
+        color: #fff;
       }
       .input-container {
         display: flex;
@@ -164,12 +169,21 @@
       const userId = "674850197227b000090d5c3f";
       let socket;
 
-      function addLog(message, type = "info") {
+      function addLog(message, type = "info", details = null) {
         const logContainer = document.getElementById("logContainer");
         const logEntry = document.createElement("div");
         logEntry.className = `log-entry log-${type}`;
         const timestamp = new Date().toLocaleTimeString();
-        logEntry.textContent = `[${timestamp}] ${message}`;
+
+        // Format the log message
+        let logText = `[${timestamp}] ${message}`;
+
+        // Add error details if available
+        if (details) {
+          logText += `\n└─ Details: ${details}`;
+        }
+
+        logEntry.innerHTML = logText.replace(/\n/g, "<br>");
         logContainer.appendChild(logEntry);
         logContainer.scrollTop = logContainer.scrollHeight;
       }
@@ -206,8 +220,13 @@
         });
 
         socket.on("error", (error) => {
-          addLog(`Socket error: ${error.message}`, "error");
-          addMessage("System", `Error: ${error.message}`, "status-message");
+          const errorDetails = error.stack || error.message || "Unknown error";
+          addLog(`Socket error`, "error", errorDetails);
+          addMessage(
+            "System",
+            `Connection error: ${error.message}`,
+            "status-message"
+          );
         });
       }
 
@@ -226,10 +245,21 @@
             typeof data.content === "object"
               ? JSON.stringify(data.content)
               : data.content;
+
+          // Enhanced error analysis
+          let errorDetails = analyzeError(errorMessage);
+
           addMessage("System", `Error: ${errorMessage}`, "status-message");
-          addLog(`Error: ${errorMessage}`, "error");
+          addLog(`Error in request`, "error", errorDetails);
         } else if (data.type === "text") {
           addMessage("Ayla", data.content, "ai-message");
+
+          // Log successful responses
+          addLog(
+            "Successful response",
+            "info",
+            `Response type: ${data.type}\nContent length: ${data.content.length}`
+          );
         }
       }
 
@@ -239,20 +269,78 @@
 
         if (!message) return;
 
+        // Pre-process the message to handle numbers
+        const processedMessage = preprocessMessage(message);
         addMessage("You", message, "user-message");
 
         const messageData = {
-          message: message,
+          message: processedMessage.message,
           user_id: userId,
           language: "en",
           provider: "openai",
           model: "gpt-4o-mini",
           type: "text",
+          metadata: processedMessage.metadata,
         };
 
-        addLog(`Sending message: ${JSON.stringify(messageData)}`, "debug");
+        // Enhanced logging
+        addLog(
+          `Sending message`,
+          "debug",
+          `Original: "${message}"\nProcessed: ${JSON.stringify(
+            messageData,
+            null,
+            2
+          )}`
+        );
+
         socket.emit("chat_message", messageData);
         messageInput.value = "";
+      }
+
+      // Add this new function to handle message preprocessing
+      function preprocessMessage(message) {
+        const metadata = {
+          numbers: [],
+          year: null,
+          quantity: null,
+        };
+
+        // Extract numbers and their context
+        const numberMatches = message.match(/\b\d+\b/g);
+        if (numberMatches) {
+          numberMatches.forEach((num) => {
+            // Convert numbers to strings in the metadata
+            metadata.numbers.push(String(num));
+
+            // Identify years
+            if (num.length === 4 && num.startsWith("20")) {
+              metadata.year = String(num);
+            }
+
+            // Identify quantities
+            if (
+              message.toLowerCase().includes("need") ||
+              message.toLowerCase().includes("want")
+            ) {
+              metadata.quantity = String(num);
+            }
+          });
+
+          // Log the number processing
+          addLog(
+            "Processing numbers in message",
+            "info",
+            `Found numbers: ${metadata.numbers.join(", ")}\n` +
+              `Year: ${metadata.year || "none"}\n` +
+              `Quantity: ${metadata.quantity || "none"}`
+          );
+        }
+
+        return {
+          message: message,
+          metadata: metadata,
+        };
       }
 
       function addMessage(sender, content, className) {
@@ -264,6 +352,35 @@
         messageDiv.textContent = `${sender}: ${content}`;
         messageContainer.appendChild(messageDiv);
         messageContainer.scrollTop = messageContainer.scrollHeight;
+      }
+
+      // Add this new function for detailed error analysis
+      function analyzeError(errorMessage) {
+        let details = [];
+
+        if (errorMessage.includes("validation error")) {
+          details.push("Validation Error Details:");
+
+          if (errorMessage.includes("string_type")) {
+            details.push("- Number was sent as integer instead of string");
+            details.push(
+              "- Solution: Numbers are now being converted to strings"
+            );
+          }
+
+          if (errorMessage.includes("nullable")) {
+            details.push("- Required field was null or undefined");
+            details.push("- Solution: Checking all required fields");
+          }
+        }
+
+        if (errorMessage.includes("processing")) {
+          details.push("Processing Error Details:");
+          details.push("- Server encountered an error processing the request");
+          details.push("- Check server logs for more information");
+        }
+
+        return details.join("\n");
       }
 
       // Handle enter key
